@@ -31,6 +31,7 @@ Basic usage:
 package epub
 
 import (
+	"encoding/xml"
 	"fmt"
 	"io/fs"
 	"log"
@@ -365,15 +366,29 @@ func (e *Epub) addSection(parentFilename string, body string, sectionTitle strin
 		}
 	}
 
-	x, err := newXhtml(body)
-	if err != nil {
-		return internalFilename, fmt.Errorf("can't add section we cant create xhtml: %w", err)
-	}
-	x.setTitle(sectionTitle)
-	x.setXmlnsEpub(xmlnsEpub)
+	var x *xhtml
+	var err error
 
-	if internalCSSPath != "" {
-		x.setCSS(internalCSSPath)
+	// Check if body already contains a complete XHTML document
+	if isCompleteXHTMLDocument(body) {
+		// Parse the existing XHTML document and modify it as needed
+		x, err = parseExistingXHTML(body, sectionTitle, internalCSSPath)
+		if err != nil {
+			return internalFilename, fmt.Errorf("can't parse existing xhtml document: %w", err)
+		}
+		x.setXmlnsEpub(xmlnsEpub)
+	} else {
+		// Create new XHTML document as before
+		x, err = newXhtml(body)
+		if err != nil {
+			return internalFilename, fmt.Errorf("can't add section we cant create xhtml: %w", err)
+		}
+		x.setTitle(sectionTitle)
+		x.setXmlnsEpub(xmlnsEpub)
+
+		if internalCSSPath != "" {
+			x.setCSS(internalCSSPath)
+		}
 	}
 
 	s := &epubSection{
@@ -714,4 +729,53 @@ func sectionAppender(sections []*epubSection, parentFilename string, targetSecti
 	}
 
 	return fmt.Errorf("parent section not found")
+}
+
+// isCompleteXHTMLDocument checks if the body string contains a complete XHTML document
+// by looking for XML declaration and DOCTYPE
+func isCompleteXHTMLDocument(body string) bool {
+	// Trim whitespace to handle leading/trailing spaces
+	trimmed := strings.TrimSpace(body)
+
+	// Check for XML declaration
+	hasXMLDecl := strings.HasPrefix(trimmed, "<?xml")
+
+	// Check for DOCTYPE declaration
+	hasDoctype := strings.Contains(trimmed, "<!DOCTYPE")
+
+	// Check for html root element
+	hasHTMLRoot := strings.Contains(trimmed, "<html")
+
+	return hasXMLDecl && hasDoctype && hasHTMLRoot
+}
+
+// parseExistingXHTML parses an existing XHTML document and modifies it as needed
+func parseExistingXHTML(body string, sectionTitle string, internalCSSPath string) (*xhtml, error) {
+	// Create a new xhtml structure
+	xmlroot, err := newXhtmlRoot()
+	if err != nil {
+		return nil, fmt.Errorf("can't create newXhtmlRoot: %w", err)
+	}
+
+	// Parse the existing XHTML document
+	err = xml.Unmarshal([]byte(body), xmlroot)
+	if err != nil {
+		return nil, fmt.Errorf("can't parse existing XHTML document: %w", err)
+	}
+
+	x := &xhtml{
+		xml: xmlroot,
+	}
+
+	// Set title if provided and not already present
+	if sectionTitle != "" && x.xml.Head.Title.Value == "" {
+		x.setTitle(sectionTitle)
+	}
+
+	// Set CSS if provided and not already present
+	if internalCSSPath != "" && x.xml.Head.Link == nil {
+		x.setCSS(internalCSSPath)
+	}
+
+	return x, nil
 }
